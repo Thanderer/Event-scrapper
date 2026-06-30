@@ -1,52 +1,8 @@
 from __future__ import annotations
-
-"""
-find_and_handle_duplicates.py
-─────────────────────────────
-Step 3 of the deduplication pipeline: fuzzy duplicate detection and
-handling on the fully merged in-memory List[Event].
-
-Runs AFTER all scrapers have finished and merge_events() has been called.
-
-Detection dimensions
-────────────────────
-  title     – Levenshtein similarity on _name_normalized (0–100%)
-  time      – Proximity of start_iso timestamps        (0–100%)
-  location  – Haversine distance between geo coords    (0–100%)
-
-Similarity normalisation
-────────────────────────
-  title_sim     = 1 - lev_distance / max(len(a), len(b))
-  time_sim      = 1 - min(|Δ hours| / TIME_MAX_HOURS, 1.0)
-  location_sim  = 1 - min(haversine_km / LOC_MAX_KM,  1.0)
-
-Match rule
-──────────
-  A pair is a candidate if ANY single dimension > MATCH_THRESHOLD (0.80).
-
-Classification
-──────────────
-  duplicate  – title_sim > MATCH_THRESHOLD
-               AND time_sim > MATCH_THRESHOLD   (events are close in time)
-               AND (location_sim > MATCH_THRESHOLD OR both coords missing)
-               → merge fields, keep one row
-
-  recurrent  – title_sim > MATCH_THRESHOLD
-               AND location_sim > MATCH_THRESHOLD (same venue)
-               AND time_sim <= MATCH_THRESHOLD    (different date/time)
-               → keep both rows, assign shared series_id (skipped for now,
-                 series_id stays None — to be implemented later)
-
-  uncertain  – candidate that doesn't cleanly fit either rule
-               → kept as-is, logged for inspection
-
-Dependencies
-────────────
-  pip install python-Levenshtein haversine
-"""
-
+from datetime import timezone
 import hashlib
 import logging as log
+
 import re
 from typing import List, Optional
 from Levenshtein import distance as lev_distance
@@ -75,9 +31,19 @@ def _time_sim(a: Event, b: Event) -> Optional[float]:
     Proximity of start_iso timestamps.
     Returns None if either event has no start_iso (treated as unknown).
     """
-    if not a.start_iso or not b.start_iso:
-        return None
-    delta_hours = abs((a.start_iso - b.start_iso).total_seconds()) / 3600.0
+    if a.start_iso is None or b.start_iso is None:
+        return 0.0
+    
+    def _to_naive(dt):
+        """Strip tzinfo after converting to UTC."""
+        if dt.tzinfo is not None:
+            return dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    
+    a_dt = _to_naive(a.start_iso)
+    b_dt = _to_naive(b.start_iso)
+
+    delta_hours = abs((a_dt - b_dt).total_seconds()) / 3600.0
     return 1.0 - min(delta_hours / TIME_MAX_HOURS, 1.0)
 
 
@@ -218,6 +184,11 @@ def find_and_handle_duplicates(events: List[Event]) -> List[Event]:
     for i in range(n):
         for j in range(i + 1, n):
             a, b = events[i], events[j]
+
+            if a.start_iso and b.start_iso:
+                delta_days = abs((a.start_iso - b.start_iso).total_seconds()) / 86400
+                if delta_days > 2:
+                    continue
 
             t_sim  = _title_sim(a, b)
             ti_sim = _time_sim(a, b)

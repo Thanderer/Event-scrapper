@@ -2,10 +2,10 @@ import os
 import re
 import hashlib
 import requests
-import time
+import time, random
 import unicodedata
 import logging as log
-from datetime import datetime
+from datetime import datetime, timezone as _tz
 from typing import Optional, List
 from dataclasses import dataclass, field
 from bs4 import BeautifulSoup
@@ -32,7 +32,40 @@ class Event:
     series_id: Optional[List[str]]
 
     def __post_init__(self):
+
+        def _to_list(x) -> list[str] | None:
+            if x is None:
+                return None
+            if isinstance(x, list):
+                return x if x else None
+            if isinstance(x, str):
+                return [x] if x else None 
+            return None
+
+        def _to_float(x):
+            try:
+                return float(x) if x is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        def _to_naive_utc(dt):
+            if dt is None:
+                return None
+            if dt.tzinfo is not None:
+                return dt.astimezone(_tz.utc).replace(tzinfo=None)
+            return dt
+
         self._name_normalized = ScraperInterface.normalize(self.event_name)
+        self.geo_lat          = _to_float(self.geo_lat)
+        self.geo_lon          = _to_float(self.geo_lon)
+        self.start_iso        = _to_naive_utc(self.start_iso)
+        self.end_iso          = _to_naive_utc(self.end_iso)
+        self.description      = _to_list(self.description)
+        self.keywords         = _to_list(self.keywords)
+        self.image_url        = _to_list(self.image_url)
+        self.image_local_path = _to_list(self.image_local_path)
+        self.source           = _to_list(self.source) or []
+        self.source_url       = _to_list(self.source_url) or []
 
 @dataclass
 class ScraperConfig:
@@ -40,10 +73,16 @@ class ScraperConfig:
     image_dir: str
 
 _RETRY_ATTEMPTS = 4
-_RETRY_BACKOFF  = [3, 6, 12, 25]
+_RETRY_BACKOFF = [10, 30, 60, 120]
 _REQUEST_TIMEOUT = 20
 
-_session = requests.Session()
+
+def _backoff_sleep(attempt: int):
+    base = 30 * (2 ** (attempt - 1))     # 30, 60, 120, 240s
+    jitter = random.uniform(0, base * 0.3)
+    wait = base + jitter
+    log.warning(f"  backing off {wait:.0f}s (attempt {attempt})")
+    time.sleep(wait)
 
 class ScraperInterface(ABC):
 
@@ -83,7 +122,7 @@ class ScraperInterface(ABC):
 
     # Shared defaults (override if needed) 
 
-    def fetch(self, url: str) -> str | None:
+    def fetch(self, url: str, session) -> str | None:
         """
         HTTP GET with retry/backoff. Returns raw HTML string or None.
         Override if a scraper needs auth headers, sessions, or different
@@ -91,25 +130,25 @@ class ScraperInterface(ABC):
         """
         for attempt in range(_RETRY_ATTEMPTS):
             try:
-                r = _session.get(url, timeout=_REQUEST_TIMEOUT)
+                r = session.get(url, timeout=_REQUEST_TIMEOUT)
                 if r.status_code == 200:
                     r.encoding = "utf-8"
                     return r.text
                 elif r.status_code in (503, 429, 502, 504):
                     wait = _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)]
-                    log.warning(f"HTTP {r.status_code} — retrying in {wait}s (attempt {attempt+1}): {url}")
-                    time.sleep(wait)
+                    _backoff_sleep(attempt)
+                    log.warning(f"HTTP {r.status_code} â€” retrying in {wait}s (attempt {attempt+1}): {url}")
                 else:
-                    log.warning(f"HTTP {r.status_code} — skipping: {url}")
+                    log.warning(f"HTTP {r.status_code} â€” skipping: {url}")
                     return None
             except requests.RequestException as e:
                 wait = _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)]
-                log.warning(f"Request error ({e}) — retrying in {wait}s")
-                time.sleep(wait)
+                log.warning(f"Request error ({e}) â€” retrying in {wait}s")
+                _backoff_sleep(attempt)
         log.error(f"All {_RETRY_ATTEMPTS} attempts failed for {url}")
         return None
 
-    def download_image(self, url: str, images_dir: str) -> str | None:
+    def download_image(self, url: str, images_dir: str, session) -> str | None:
         """
         Download image from url into images_dir/<hash>.<ext>.
         Skips if already exists. Returns local path or None.
@@ -125,7 +164,7 @@ class ScraperInterface(ABC):
         if os.path.exists(local_path):
             return local_path
         try:
-            r = _session.get(url, timeout=_REQUEST_TIMEOUT, stream=True)
+            r = session.get(url, timeout=_REQUEST_TIMEOUT, stream=True)
             r.raise_for_status()
             os.makedirs(images_dir, exist_ok=True)
             with open(local_path, "wb") as f:

@@ -5,21 +5,22 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
     ports:
       - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
-    volumes:
-      - db_data:/var/lib/postgresql/data
-      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
   
   scraper:
     build:
-      context: scraper
+      context: ./scraper
       dockerfile: Dockerfile
     depends_on:
       db:
@@ -29,8 +30,10 @@ services:
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
-      SCRAPE_DAILY_DAYS: ${SCRAPE_DAILY_DAYS} #this will scrape for example next 7 days of events every day
-      SCRAPE_DEEP_DAYS: ${SCRAPE_WEEKLY_DAYS} #this will scrape for example next 30 days of events 15 days
+      SCRAPE_DAILY_DAYS: ${SCRAPE_DAILY_DAYS} 
+      SCRAPE_BIWEEKLY_DAYS: ${SCRAPE_BIWEEKLY_DAYS} 
+      SCRAPE_YEARLY_DAYS: ${SCRAPE_YEARLY_DAYS} 
+      YEARLY_TRIGGER_THRESHOLD_DAYS: ${YEARLY_TRIGGER_THRESHOLD_DAYS} 
     restart: unless-stopped
     volumes:
       - ./data/images:/app/data/images

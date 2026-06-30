@@ -130,7 +130,7 @@ class DatesMdScraper(ScraperInterface):
         for page_num in range(1, MAX_PAGES + 1):
             page_url = self.listing_url(page_num)
             log.info(f"Listing page {page_num} → {page_url}")
-            html = self.fetch(page_url)
+            html = self.fetch(page_url, session)
             if not html:
                 log.error(f"Could not fetch listing page {page_num} — stopping.")
                 break
@@ -173,7 +173,7 @@ class DatesMdScraper(ScraperInterface):
             slug_url = stub["_detail_url"]
             time.sleep(DELAY_SECONDS)
 
-            detail_html = self.fetch(slug_url)
+            detail_html = self.fetch(slug_url, session)
             if not detail_html:
                 consecutive_errors += 1
                 log.warning(f"Detail fetch failed ({consecutive_errors} consecutive): {slug_url}")
@@ -279,7 +279,7 @@ class DatesMdScraper(ScraperInterface):
 
                 occ_date   = item["occ_date"]
                 image_url  = item["image_url"]
-                image_local = self.download_image(image_url, config.image_dir) if image_url else None
+                image_local = self.download_image(image_url, config.image_dir, session) if image_url else None
 
                 try:
                     start_dt: datetime | None = datetime.fromisoformat(occ_date).replace(tzinfo=timezone.utc)

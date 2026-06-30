@@ -23,7 +23,10 @@ CREATE TABLE IF NOT EXISTS events (
     price TEXT,
     image_url TEXT[],
     image_local_path TEXT[],
-    series_id TEXT[]  DEFAULT NULL
+    series_id TEXT[]  DEFAULT NULL,
+
+    CONSTRAINT events_unique_event
+        UNIQUE (_name_normalized, start_iso, venue_name)
 );
 
 

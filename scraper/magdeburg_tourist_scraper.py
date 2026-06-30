@@ -2,7 +2,7 @@ import hashlib
 import os
 import re
 import requests
-import time
+import time, random
 import logging as log
 from datetime import datetime, timezone
 from urllib.parse import unquote
@@ -15,17 +15,31 @@ BASE_LISTING_URL = "https://veranstaltungen.magdeburg-tourist.de/magdeburg"
 PAGE_SIZE = 20
 MAX_PAGES = 5000    
 DELAY_SECONDS = 1.5
-RETRY_ATTEMPTS = 4
-RETRY_BACKOFF = [3, 6, 12, 25]
-REQUEST_TIMEOUT = 20
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:126.0) Gecko/20100101 Firefox/126.0",
+]
+
 HEADERS = {
-    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection":      "keep-alive",
+    "User-Agent":random.choice(USER_AGENTS),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Connection": "keep-alive",
+    "Referer": "https://www.magdeburg-tourist.de/",
+    "Cache-Control":    "no-cache",
+    "Pragma":           "no-cache",
+    "Connection":       "keep-alive",
     "Upgrade-Insecure-Requests": "1",
-    "Referer":         "https://veranstaltungen.magdeburg-tourist.de/magdeburg",
+    "Sec-Fetch-Dest":   "document",
+    "Sec-Fetch-Mode":   "navigate",
+    "Sec-Fetch-Site":   "none",
+    "Sec-Fetch-User":   "?1",
+    "sec-ch-ua":        '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
+    "sec-ch-ua-mobile": "?0",
+     "sec-ch-ua-platform": '"Windows"',
 }
 
 session = requests.Session()
@@ -172,12 +186,12 @@ class MagdeburgTouristScraper(ScraperInterface):
         while page_num < MAX_PAGES:
             url = self.listing_url(offset)
             log.info(f"Listing page {page_num + 1} (os={offset}) → {url}")
-            html = self.fetch(url)
+            html = self.fetch(url, session)
             if not html:
-                log.warning("Failed to fetch listing page — stopping pagination.")
-                break
+                log.warning(f"Failed to fetch listing page {page_num + 1} (os={offset})")
+                break  
 
-            events_batch, soup = self.parse_listing_page(html)
+            events_batch = self.parse_listing_page(html)
             if not events_batch:
                 log.info("No events on this page — stopping pagination.")
                 break
@@ -207,7 +221,7 @@ class MagdeburgTouristScraper(ScraperInterface):
 
         for i, (url_key, event) in enumerate(listing_events.items(), 1):
             log.info(f"[{i}/{total}] {url_key[:90]}")
-            detail_html = self.fetch(url_key)
+            detail_html = self.fetch(url_key, session)
             time.sleep(DELAY_SECONDS)
 
             detail = self.parse_detail_page(detail_html) if detail_html else {}
@@ -267,14 +281,14 @@ class MagdeburgTouristScraper(ScraperInterface):
                 merged = item["merged"]
                 thumb  = item["thumb"]
                 coords = merged.get("location_coords", [None, None])
-                image_local = self.download_image(thumb, config.image_dir) if thumb else None
+                image_local = self.download_image(thumb, config.image_dir, session) if thumb else None
 
                 final_events.append(Event(
                     event_name =       merged.get("name", ""),
                     source =           [self.source_name],
                     source_url =       [item["url_key"]],
                     scraped_at =       datetime.now(timezone.utc),
-                    description =      merged.get("description", ""),
+                    description =      [d] if (d := merged.get("description", "").strip()) else None,
                     keywords =         [merged.get("category", "")] if merged.get("category") else [],
                     start_iso =        datetime.fromisoformat(item["start_iso"]) if item["start_iso"] else None,
                     end_iso =          datetime.fromisoformat(item["end_iso"]) if item["end_iso"] else None,
@@ -287,5 +301,5 @@ class MagdeburgTouristScraper(ScraperInterface):
                     image_local_path = [image_local] if image_local else [],
                     series_id =        [series_id] if series_id else None,
                 ))
-        log.info(f"[mvgm] Done. {len(final_events)} Event objects created.")
+        log.info(f"[magdeburg_tourist] Done. {len(final_events)} Event objects created.")
         return ScraperInterface._dedup_exact_url(final_events)

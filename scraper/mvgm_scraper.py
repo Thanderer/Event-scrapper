@@ -145,7 +145,7 @@ class MvgmScraper(ScraperInterface):
             url   = f"{LIST_URL}?month={month}"
             log.info(f"[mvgm] Listing month {month} → {url}")
 
-            html = self.fetch(url)
+            html = self.fetch(url, session)
             if not html:
                 log.warning(f"Failed to fetch listing for month {month} — skipping.")
                 time.sleep(DELAY_SECONDS)
@@ -174,7 +174,7 @@ class MvgmScraper(ScraperInterface):
 
         for i, stub in enumerate(unique_stubs, 1):
             log.info(f"[{i}/{total}] {stub['name'][:70]}")
-            detail_html = self.fetch(stub["detail_url"])
+            detail_html = self.fetch(stub["detail_url"], session)
             time.sleep(DELAY_SECONDS)
 
             detail = self.parse_detail_page(detail_html, stub["end_iso"]) if detail_html else {}
@@ -231,7 +231,7 @@ class MvgmScraper(ScraperInterface):
             for idx in indices:
                 item        = intermediate[idx]
                 coords      = VENUE_COORDS.get(item["venue"])
-                image_local = self.download_image(item["image_url"], config.image_dir) if item["image_url"] else None
+                image_local = self.download_image(item["image_url"], config.image_dir, session) if item["image_url"] else None
 
                 try:
                     start_dt = datetime.fromisoformat(item["start_iso"]).replace(tzinfo=timezone.utc) if item["start_iso"] else None
